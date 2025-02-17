@@ -33,6 +33,8 @@
 #include "GCNDPPCombine.h"
 #include "GCNIterativeScheduler.h"
 #include "GCNPreRALongBranchReg.h"
+#include "GCNPreRAOptimizations.h"
+#include "GCNRewritePartialRegUses.h"
 #include "GCNSchedStrategy.h"
 #include "GCNVOPDUtils.h"
 #include "R600.h"
@@ -40,6 +42,7 @@
 #include "SIFixSGPRCopies.h"
 #include "SIFixVGPRCopies.h"
 #include "SIFoldOperands.h"
+#include "SIFormMemoryClauses.h"
 #include "SILoadStoreOptimizer.h"
 #include "SILowerControlFlow.h"
 #include "SILowerSGPRSpills.h"
@@ -538,7 +541,7 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeAMDGPUTarget() {
   initializeSIMemoryLegalizerPass(*PR);
   initializeSIOptimizeExecMaskingLegacyPass(*PR);
   initializeSIPreAllocateWWMRegsLegacyPass(*PR);
-  initializeSIFormMemoryClausesPass(*PR);
+  initializeSIFormMemoryClausesLegacyPass(*PR);
   initializeSIPostRABundlerPass(*PR);
   initializeGCNCreateVOPDPass(*PR);
   initializeAMDGPUUnifyDivergentExitNodesPass(*PR);
@@ -548,9 +551,9 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeAMDGPUTarget() {
   initializeAMDGPUPrintfRuntimeBindingPass(*PR);
   initializeAMDGPUResourceUsageAnalysisPass(*PR);
   initializeGCNNSAReassignPass(*PR);
-  initializeGCNPreRAOptimizationsPass(*PR);
+  initializeGCNPreRAOptimizationsLegacyPass(*PR);
   initializeGCNPreRALongBranchRegLegacyPass(*PR);
-  initializeGCNRewritePartialRegUsesPass(*PR);
+  initializeGCNRewritePartialRegUsesLegacyPass(*PR);
   initializeGCNRegPressurePrinterPass(*PR);
   initializeAMDGPUPreloadKernArgPrologLegacyPass(*PR);
   initializeAMDGPUWaitSGPRHazardsLegacyPass(*PR);
@@ -804,7 +807,8 @@ void AMDGPUTargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
   PB.registerPipelineEarlySimplificationEPCallback(
       [](ModulePassManager &PM, OptimizationLevel Level,
          ThinOrFullLTOPhase Phase) {
-        PM.addPass(AMDGPUPrintfRuntimeBindingPass());
+        if (!isLTOPreLink(Phase))
+          PM.addPass(AMDGPUPrintfRuntimeBindingPass());
 
         if (Level == OptimizationLevel::O0)
           return;
@@ -1147,6 +1151,7 @@ public:
   void addPostRegAlloc() override;
   void addPreSched2() override;
   void addPreEmitPass() override;
+  void addPostBBSections() override;
 };
 
 } // end anonymous namespace
@@ -1686,6 +1691,11 @@ void GCNPassConfig::addPreEmitPass() {
     addPass(&AMDGPUInsertDelayAluID);
 
   addPass(&BranchRelaxationPassID);
+}
+
+void GCNPassConfig::addPostBBSections() {
+  // We run this later to avoid passes like livedebugvalues and BBSections
+  // having to deal with the apparent multi-entry functions we may generate.
   addPass(createAMDGPUPreloadKernArgPrologLegacyPass());
 }
 
